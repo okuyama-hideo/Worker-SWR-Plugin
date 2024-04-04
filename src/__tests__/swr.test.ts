@@ -4,6 +4,8 @@ import { KVCacheStore } from '../helpers/kv'
 import { makeSwr } from '../swr'
 import { NotMatchedError } from '../swr'
 
+jest.setTimeout(10000)
+
 declare global {
   function getMiniflareBindings(): {
     CACHE: KVNamespace
@@ -14,6 +16,8 @@ const waitUntilMock = jest.fn()
 const context = {
   waitUntil: waitUntilMock,
 } as unknown as FetchEvent
+
+const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms))
 
 const originServer = new MockServer()
 
@@ -241,4 +245,105 @@ test('Compatibility with old-style KV data (`cacheTtl`) is expired', async () =>
   expect(res.status).toBe(200)
   expect(await res.text()).toBe('this is cached response; /old-style-kv/')
   expect(waitUntilMock).toBeCalledTimes(1)
+})
+
+describe('swr.match with cacheTtl option.', () => {
+  test('If there is no cache, the response is returned from the origin and revalidated.', async () => {
+    const { CACHE } = getMiniflareBindings()
+    const remoteRequest = new Request(
+      `${originServer.getURL().origin}/first-landing-with-cacheTtl/`,
+    )
+    const swr = makeSwr(remoteRequest, CACHE, context, { debug: true })
+    const res = await swr.match({ cacheTtl: 60 })
+
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe(
+      'this is origin response; /first-landing-with-cacheTtl/',
+    )
+  })
+
+  test('If there is a cache and it is within the expiration date, no revalidation will occur, match is within or without the cacheTtl.', async () => {
+    const { CACHE } = getMiniflareBindings()
+    const remoteRequest = new Request(
+      `${originServer.getURL().origin}/second-landing-with-cacheTtl/`,
+    )
+    const kvStore = KVCacheStore(CACHE, 60)
+    await kvStore.put(
+      remoteRequest,
+      new Response('this is cached response; /second-landing-with-cacheTtl/'),
+    )
+    const swr = makeSwr(remoteRequest, CACHE, context)
+    const res = await swr.match({ cacheTtl: 60 })
+
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe(
+      'this is cached response; /second-landing-with-cacheTtl/',
+    )
+    await waitForExpect(async () => {
+      await sleep(30)
+      const res1 = await swr.match({ cacheTtl: 60 })
+      expect(await res1?.text()).toBe(
+        'this is cached response; /second-landing-with-cacheTtl/',
+      )
+      await sleep(40)
+      const res2 = await swr.match({ cacheTtl: 60 })
+      expect(await res2?.text()).toBe(
+        'this is cached response; /second-landing-with-cacheTtl/',
+      )
+    })
+    expect(waitUntilMock).not.toBeCalled()
+  })
+
+  test('If there is a cache and it is within the expiration date, revalidation will occur, match is within or without the cacheTtl.', async () => {
+    const { CACHE } = getMiniflareBindings()
+    const remoteRequest = new Request(
+      `${originServer.getURL().origin}/third-landing-with-cacheTtl/`,
+    )
+    const kvStore = KVCacheStore(CACHE, 60)
+    await kvStore.put(
+      remoteRequest,
+      new Response('this is cached response; /third-landing-with-cacheTtl/'),
+    )
+    const swr = makeSwr(remoteRequest, CACHE, context)
+    await swr.match({ cacheTtl: 60 })
+
+    await kvStore.put(
+      remoteRequest,
+      new Response(
+        'this is revalidate cached response; /third-landing-with-cacheTtl/',
+      ),
+    )
+
+    await waitForExpect(async () => {
+      await sleep(30)
+      const res1 = await swr.match({ cacheTtl: 60 })
+      expect(await res1?.text()).toBe(
+        'this is revalidate cached response; /third-landing-with-cacheTtl/',
+      )
+      await sleep(40)
+      const res2 = await swr.match({ cacheTtl: 60 })
+      expect(await res2?.text()).toBe(
+        'this is revalidate cached response; /third-landing-with-cacheTtl/',
+      )
+    })
+    expect(waitUntilMock).not.toBeCalled()
+  })
+
+  test('Delete cache if status 4xx upon revalidation, match is cacheTtl.', async () => {
+    const { CACHE } = getMiniflareBindings()
+    const remoteRequest = new Request(
+      `${originServer.getURL().origin}/status-404/`,
+    )
+    const kvStore = KVCacheStore(CACHE, 0)
+    await kvStore.put(remoteRequest, new Response('this is cached response'))
+    const swr = makeSwr(remoteRequest, CACHE, context)
+    const res = await swr.match({ cacheTtl: 60 })
+
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('this is cached response')
+    await waitForExpect(async () => {
+      const res = await swr.match({ cacheTtl: 60 })
+      expect(await res.text()).toBe('this is origin response; /status-404/')
+    })
+  })
 })

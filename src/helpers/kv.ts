@@ -12,9 +12,14 @@ type CachedDataDeprecated = {
   cacheTtl: string
 }
 
+export type MatchOptions = Pick<KVNamespaceGetOptions<'json'>, 'cacheTtl'>
+
 export type KVCacheStoreType = {
   put: (req: Request, res: Response) => Promise<void>
-  match: (req: Request) => Promise<[Response | null, { remainingTime: number }]>
+  match: (
+    req: Request,
+    option?: MatchOptions,
+  ) => Promise<[Response | null, { remainingTime: number }]>
   delete: (req: Request) => Promise<void>
 }
 
@@ -39,9 +44,10 @@ export const KVCacheStore = (
       )
     },
 
-    match: async (req) => {
+    match: async (req, addOptions) => {
       const res = await kv.get<CachedData | CachedDataDeprecated>(req.url, {
         type: 'json',
+        ...addOptions,
       })
       if (!res) return [null, { remainingTime: 0 }]
       const remainingTime =

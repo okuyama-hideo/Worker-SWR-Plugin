@@ -1,6 +1,7 @@
-import { KVCacheStore, KVCacheStoreType } from './helpers/kv'
+import { KVCacheStore, KVCacheStoreType, MatchOptions } from './helpers/kv'
 
 const TTL_DEFAULT = 60
+const KV_GET_OPTION_CACHE_TTL_DEFAULT = 60
 const PROXY_DEFAULT = (r: Request) => r
 
 type RequestProxy = (req: Request) => Request
@@ -13,7 +14,11 @@ type Context = { waitUntil: (promise: Promise<any>) => void }
  * @property {RequestProxy} proxy Function for proxying requests
  * @property {boolean} debug Output log for debugging
  */
-type SwrOptions = { ttl?: number; proxy?: RequestProxy; debug?: boolean }
+type SwrOptions = {
+  ttl?: number
+  proxy?: RequestProxy
+  debug?: boolean
+}
 
 /**
  * @property {MatchFunc} match Search the cache using the request as a key. If there is a cache, return it and re-verify it according to the expiration.
@@ -81,10 +86,12 @@ type MakeFunctionArgs = {
  * MatchFunc
  * @property {boolean} forceRevalidate If set to true, it will be forcibly revalidated regardless of the cache expiration.
  * @property {'fetch' | 'error'} onNotMatched Set 'error' to throw a `NotMatchedError` when the cache is not found. The default is 'fetch'
+ * @property {number} cacheTtl is a parameter that defines the length of time in seconds that a KV result is cached in the global network location it is accessed from.
  */
 type MatchFunc = (option?: {
   forceRevalidate?: boolean
   onNotMatched?: 'fetch' | 'error'
+  cacheTtl?: MatchOptions['cacheTtl']
 }) => Promise<Response>
 
 const makeMatchFunc = (args: MakeFunctionArgs): MatchFunc => {
@@ -93,9 +100,15 @@ const makeMatchFunc = (args: MakeFunctionArgs): MatchFunc => {
   const revalidate = makeRevalidateFunc(args)
 
   return async (option) => {
-    const { forceRevalidate = false, onNotMatched = 'fetch' } = option ?? {}
+    const {
+      forceRevalidate = false,
+      onNotMatched = 'fetch',
+      cacheTtl = KV_GET_OPTION_CACHE_TTL_DEFAULT,
+    } = option ?? {}
 
-    const [kvCache, { remainingTime }] = await storeApi.match(request)
+    const [kvCache, { remainingTime }] = await storeApi.match(request, {
+      cacheTtl,
+    })
 
     if (forceRevalidate || remainingTime < 1 || !kvCache)
       context.waitUntil(revalidate())
